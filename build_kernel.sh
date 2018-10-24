@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -x
 
 KERNEL_RELEASE=
 BUILD_KERNEL_HEADERS=false
@@ -12,9 +13,11 @@ package_check()
 
 print_usage()
 {
-	echo "-h/--help         Show help options"
-	echo "-b [TARGET_BOARD]	Target board ex) -b artik710|artik530|artik5|artik10"
-	echo "--kernel-headers	Generate kernel headers tarball"
+	echo "-h/--help            help options"
+	echo "-b [TARGET_BOARD]    Target board ex) -b artik710|artik530|artik5|artik10"
+	echo "-k/--kernel-headers  Generate kernel headers tarball"
+	echo "-m                   Build kernel modules only"
+	echo "-n/--no-clean        Do not clean previous build"
 
 	exit 0
 }
@@ -30,8 +33,14 @@ parse_options()
 			-b)
 				TARGET_BOARD="$2"
 				shift ;;
-			--kernel-headers)
+			-k|--kernel-headers)
 				BUILD_KERNEL_HEADERS=true
+				shift ;;
+			-m)
+				BUILD_KERNEL_MODULES_ONLY=true
+				shift ;;
+			-n|--no-clean)
+				NOCLEAN=true
 				shift ;;
 		esac
 	done
@@ -39,8 +48,10 @@ parse_options()
 
 build()
 {
-	make distclean
-	make $KERNEL_DEFCONFIG
+	if [ "${NOCLEAN}" != "true" ]; then
+		make distclean
+		make $KERNEL_DEFCONFIG
+	fi
 	make $KERNEL_IMAGE -j$JOBS EXTRAVERSION="-$BUILD_VERSION"
 	make $BUILD_DTB EXTRAVERSION="-$BUILD_VERSION"
 	make modules EXTRAVERSION="-$BUILD_VERSION" -j$JOBS
@@ -158,7 +169,10 @@ pushd $KERNEL_DIR
 package_check ${CROSS_COMPILE}gcc
 package_check make_ext4fs
 
-build
+
+if [ "${BUILD_KERNEL_MODULES_ONLY}" != "true" ]; then
+	build
+fi
 build_modules
 if $BUILD_KERNEL_HEADERS; then
 	build_kernel_header
