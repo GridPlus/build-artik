@@ -232,17 +232,17 @@ package_check arm-linux-gnueabihf-gcc gcc-arm-linux-gnueabihf
 
 if [ "$CONFIG_FILE" != "" ]
 then
-	. $CONFIG_FILE
+        . $CONFIG_FILE
 fi
 
 check_restrictive_pkg
 
 if [ "$BUILD_DATE" == "" ]; then
-	BUILD_DATE=`date +"%Y%m%d.%H%M%S"`
+        BUILD_DATE=`date +"%Y%m%d.%H%M%S"`
 fi
 
 if [ "$BUILD_VERSION" == "" ]; then
-	BUILD_VERSION=UNRELEASED
+        BUILD_VERSION=UNRELEASED
 fi
 
 export BUILD_DATE=$BUILD_DATE
@@ -258,128 +258,130 @@ gen_artik_release
 
 if [ "$KMS_PREBUILT_DIR" == "false" ]; then
 
-if [ "$PREBUILT_VBOOT_DIR" == "" ]; then
-	./build_uboot.sh
-	./build_kernel.sh --kernel-headers
+        if [ "$PREBUILT_VBOOT_DIR" == "" ]; then
+                ./build_uboot.sh
+                ./build_kernel.sh --kernel-headers
 
-	if $VERIFIED_BOOT ; then
-		if [ "$VBOOT_ITS" == "" ]; then
-			VBOOT_ITS=$PREBUILT_DIR/kernel_fit_verify.its
-		fi
-		if [ "$VBOOT_KEYDIR" == "" ]; then
-			echo "Please specify key directory using --vboot-keydir"
-			exit 0
-		fi
-		./mkvboot.sh $TARGET_DIR $VBOOT_KEYDIR $VBOOT_ITS
-	fi
+                if $VERIFIED_BOOT ; then
+                        if [ "$VBOOT_ITS" == "" ]; then
+                                VBOOT_ITS=$PREBUILT_DIR/kernel_fit_verify.its
+                        fi
+                        if [ "$VBOOT_KEYDIR" == "" ]; then
+                                echo "Please specify key directory using --vboot-keydir"
+                                exit 0
+                        fi
+                        ./mkvboot.sh $TARGET_DIR $VBOOT_KEYDIR $VBOOT_ITS
+                fi
+        else
+                find $PREBUILT_VBOOT_DIR -maxdepth 1 -type f -exec cp -t $TARGET_DIR {} +
+        fi
+
+        if $SECURE_BOOT ; then
+                ./mksboot.sh $TARGET_DIR
+        fi
+
+        ./mksdboot.sh
+
+        ./mkbootimg.sh
+
+        if $FULL_BUILD ; then
+                if [ "$BASE_BOARD" != "" ]; then
+                        OS_TARGET_BOARD=$BASE_BOARD
+                else
+                        OS_TARGET_BOARD=$TARGET_BOARD
+                fi
+
+                OS_OUTPUT_NAME=${OS_NAME}-arm-$OS_TARGET_BOARD-rootfs-$BUILD_VERSION-$BUILD_DATE
+                if [ "$OS_NAME" == "ubuntu" ]; then
+                        # Build kernel debian package
+                        fakeroot -u ./build_kernel_dpkg.sh -o $TARGET_DIR/debs
+
+                        BUILD_ARCH=$ARCH
+                        if [ "$BUILD_ARCH" == "arm" ]; then
+                                BUILD_ARCH=armhf
+                        fi
+                        if [ "$UBUNTU_MODULE_DEB_DIR" != "" ]; then
+                                PREBUILT_MODULE_OPT="--prebuilt-module-dir $UBUNTU_MODULE_DEB_DIR"
+                        fi
+                        UBUNTU_IMG_DIR=../ubuntu-build-service/xenial-${BUILD_ARCH}-${OS_TARGET_BOARD}
+                        ./build_ubuntu.sh -p ${UBUNTU_PACKAGE_FILE} \
+                                --ubuntu-name $OS_OUTPUT_NAME \
+                                $PREBUILT_REPO_OPT \
+                                $PREBUILT_MODULE_OPT \
+                                $WITH_E2E \
+                                --arch $BUILD_ARCH --chroot xenial-amd64-${BUILD_ARCH} \
+                                --dest-dir $TARGET_DIR $SKIP_UBUNTU_BUILD \
+                                --prebuilt-dir ../ubuntu-build-service/prebuilt/$BUILD_ARCH \
+                                --img-dir $UBUNTU_IMG_DIR \
+                                -b ${BUILD_TARGET}
+                else
+                        if [ "$FEDORA_PREBUILT_RPM_DIR" != "" ]; then
+                                PREBUILD_ADD_CMD="-r $FEDORA_PREBUILT_RPM_DIR"
+                        fi
+                        ./build_fedora.sh $BUILD_CONF -o $TARGET_DIR -b $OS_TARGET_BOARD \
+                                -p $FEDORA_PACKAGE_FILE -n $OS_OUTPUT_NAME $SKIP_CLEAN $SKIP_FEDORA_BUILD \
+                                -k fedora-arm-${OS_TARGET_BOARD}.ks \
+                                $PREBUILD_ADD_CMD
+                fi
+
+                MD5_SUM=$(md5sum $TARGET_DIR/${OS_OUTPUT_NAME}.tar.gz | awk '{print $1}')
+                OS_TARBALL=${OS_OUTPUT_NAME}-${MD5_SUM}.tar.gz
+                mv $TARGET_DIR/${OS_OUTPUT_NAME}.tar.gz $TARGET_DIR/$OS_TARBALL
+                cp $TARGET_DIR/$OS_TARBALL $TARGET_DIR/rootfs.tar.gz
+        else
+                if [ "$LOCAL_ROOTFS" == "" ]; then
+                        ./release_rootfs.sh -b $TARGET_BOARD $SERVER_URL
+                else
+                        cp $LOCAL_ROOTFS $TARGET_DIR/rootfs.tar.gz
+                fi
+        fi
+
+        ./mksdfuse.sh $MICROSD_IMAGE
+        if $DEPLOY; then
+                mkdir $TARGET_DIR/sdboot
+                ./mksdfuse.sh -m
+                mv $TARGET_DIR/${TARGET_BOARD}_sdcard-*.img $TARGET_DIR/sdboot
+        fi
+
+        ./mkrootfs_image.sh $TARGET_DIR
+
+        if [ -e $PREBUILT_DIR/flash_all_by_fastboot.sh ]; then
+                cp $PREBUILT_DIR/flash_all_by_fastboot.sh $TARGET_DIR
+                [ -e $PREBUILT_DIR/partition.txt ] && cp $PREBUILT_DIR/partition.txt $TARGET_DIR
+        else
+                cp flash_all_by_fastboot.sh $TARGET_DIR
+        fi
+
+        if [ -e $PREBUILT_DIR/usb-downloader ]; then
+                cp $PREBUILT_DIR/usb-downloader $TARGET_DIR
+                cp $PREBUILT_DIR/nsih-${TARGET_BOARD}.txt $TARGET_DIR
+                cp $PREBUILT_DIR/usb_recovery.sh $TARGET_DIR
+        fi
+
+        cp expand_rootfs.sh $TARGET_DIR
+
+        if [ -e $PREBUILT_DIR/$TARGET_BOARD/u-boot-recovery.bin ]; then
+                cp $PREBUILT_DIR/$TARGET_BOARD/u-boot-recovery.bin $TARGET_DIR
+        fi
+
+        if [ "$BUILD_VERSION" != "UNRELEASED" ]; then
+                ./release_bsp_source.sh -b $TARGET_BOARD -v $BUILD_VERSION -d $BUILD_DATE
+        fi
+
+        ls -al $TARGET_DIR
+
+        echo "ARTIK release information"
+        cat $TARGET_DIR/artik_release
+        ln -vsfn $TARGET_DIR $IMAGE_DIR/$TARGET_BOARD/$BUILD_VERSION/$BUILD_DATE/latest
+        ln -vsfn $TARGET_DIR $ARTIK_BUILD_DIR/latest
+
 else
-	find $PREBUILT_VBOOT_DIR -maxdepth 1 -type f -exec cp -t $TARGET_DIR {} +
-fi
+        export TARGET_DIR=$KMS_TARGET_DIR
 
-if $SECURE_BOOT ; then
-	./mksboot.sh $TARGET_DIR
-fi
+        test ! -d $KMS_TARGET_DIR/signed && mkdir $KMS_TARGET_DIR/signed
+        ./mksdboot_kms.sh --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
+        ./mksdfuse_kms.sh --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
+        ./mksdfuse_kms.sh -m --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
 
-./mksdboot.sh
-
-./mkbootimg.sh
-
-if $FULL_BUILD ; then
-	if [ "$BASE_BOARD" != "" ]; then
-		OS_TARGET_BOARD=$BASE_BOARD
-	else
-		OS_TARGET_BOARD=$TARGET_BOARD
-	fi
-
-	OS_OUTPUT_NAME=${OS_NAME}-arm-$OS_TARGET_BOARD-rootfs-$BUILD_VERSION-$BUILD_DATE
-	if [ "$OS_NAME" == "ubuntu" ]; then
-		# Build kernel debian package
-		fakeroot -u ./build_kernel_dpkg.sh -o $TARGET_DIR/debs
-
-		BUILD_ARCH=$ARCH
-		if [ "$BUILD_ARCH" == "arm" ]; then
-			BUILD_ARCH=armhf
-		fi
-		if [ "$UBUNTU_MODULE_DEB_DIR" != "" ]; then
-			PREBUILT_MODULE_OPT="--prebuilt-module-dir $UBUNTU_MODULE_DEB_DIR"
-		fi
-		UBUNTU_IMG_DIR=../ubuntu-build-service/xenial-${BUILD_ARCH}-${OS_TARGET_BOARD}
-		./build_ubuntu.sh -p ${UBUNTU_PACKAGE_FILE} \
-			--ubuntu-name $OS_OUTPUT_NAME \
-			$PREBUILT_REPO_OPT \
-			$PREBUILT_MODULE_OPT \
-			$WITH_E2E \
-			--arch $BUILD_ARCH --chroot xenial-amd64-${BUILD_ARCH} \
-			--dest-dir $TARGET_DIR $SKIP_UBUNTU_BUILD \
-			--prebuilt-dir ../ubuntu-build-service/prebuilt/$BUILD_ARCH \
-			--img-dir $UBUNTU_IMG_DIR \
-			-b ${BUILD_TARGET}
-	else
-		if [ "$FEDORA_PREBUILT_RPM_DIR" != "" ]; then
-			PREBUILD_ADD_CMD="-r $FEDORA_PREBUILT_RPM_DIR"
-		fi
-		./build_fedora.sh $BUILD_CONF -o $TARGET_DIR -b $OS_TARGET_BOARD \
-			-p $FEDORA_PACKAGE_FILE -n $OS_OUTPUT_NAME $SKIP_CLEAN $SKIP_FEDORA_BUILD \
-			-k fedora-arm-${OS_TARGET_BOARD}.ks \
-			$PREBUILD_ADD_CMD
-	fi
-
-	MD5_SUM=$(md5sum $TARGET_DIR/${OS_OUTPUT_NAME}.tar.gz | awk '{print $1}')
-	OS_TARBALL=${OS_OUTPUT_NAME}-${MD5_SUM}.tar.gz
-	mv $TARGET_DIR/${OS_OUTPUT_NAME}.tar.gz $TARGET_DIR/$OS_TARBALL
-	cp $TARGET_DIR/$OS_TARBALL $TARGET_DIR/rootfs.tar.gz
-else
-	if [ "$LOCAL_ROOTFS" == "" ]; then
-		./release_rootfs.sh -b $TARGET_BOARD $SERVER_URL
-	else
-		cp $LOCAL_ROOTFS $TARGET_DIR/rootfs.tar.gz
-	fi
-fi
-
-./mksdfuse.sh $MICROSD_IMAGE
-if $DEPLOY; then
-	mkdir $TARGET_DIR/sdboot
-	./mksdfuse.sh -m
-	mv $TARGET_DIR/${TARGET_BOARD}_sdcard-*.img $TARGET_DIR/sdboot
-fi
-
-./mkrootfs_image.sh $TARGET_DIR
-
-if [ -e $PREBUILT_DIR/flash_all_by_fastboot.sh ]; then
-	cp $PREBUILT_DIR/flash_all_by_fastboot.sh $TARGET_DIR
-	[ -e $PREBUILT_DIR/partition.txt ] && cp $PREBUILT_DIR/partition.txt $TARGET_DIR
-else
-	cp flash_all_by_fastboot.sh $TARGET_DIR
-fi
-
-if [ -e $PREBUILT_DIR/usb-downloader ]; then
-	cp $PREBUILT_DIR/usb-downloader $TARGET_DIR
-	cp $PREBUILT_DIR/nsih-${TARGET_BOARD}.txt $TARGET_DIR
-	cp $PREBUILT_DIR/usb_recovery.sh $TARGET_DIR
-fi
-
-cp expand_rootfs.sh $TARGET_DIR
-
-if [ -e $PREBUILT_DIR/$TARGET_BOARD/u-boot-recovery.bin ]; then
-	cp $PREBUILT_DIR/$TARGET_BOARD/u-boot-recovery.bin $TARGET_DIR
-fi
-
-if [ "$BUILD_VERSION" != "UNRELEASED" ]; then
-	./release_bsp_source.sh -b $TARGET_BOARD -v $BUILD_VERSION -d $BUILD_DATE
-fi
-
-ls -al $TARGET_DIR
-
-echo "ARTIK release information"
-cat $TARGET_DIR/artik_release
-
-else
-	export TARGET_DIR=$KMS_TARGET_DIR
-
-	test ! -d $KMS_TARGET_DIR/signed && mkdir $KMS_TARGET_DIR/signed
-	./mksdboot_kms.sh --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
-	./mksdfuse_kms.sh --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
-	./mksdfuse_kms.sh -m --kms-prebuilt-dir $KMS_PREBUILT_DIR --kms-target-dir $KMS_TARGET_DIR/signed
-
-	mv $TARGET_DIR/${TARGET_BOARD}_kms_sd*.img $KMS_TARGET_DIR/signed
+        mv $TARGET_DIR/${TARGET_BOARD}_kms_sd*.img $KMS_TARGET_DIR/signed
 fi
